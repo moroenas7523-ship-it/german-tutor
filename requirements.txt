@@ -4,3 +4,4 @@ gtts
 markdown
 weasyprint
 duckduckgo-search
+gunicorn
