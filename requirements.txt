@@ -1,0 +1,6 @@
+flask
+groq
+gtts
+markdown
+weasyprint
+duckduckgo-search
