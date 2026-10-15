@@ -1,7 +1,7 @@
 import os
 import json
 import io
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, render_template_string
 from groq import Groq
 from gtts import gTTS
 import markdown
@@ -11,241 +11,332 @@ app = Flask(__name__)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY.startswith("gsk_") else None
 
+# ============ Offizielles Nicos Weg A1 Curriculum (12 Kapitel) ============
+CURRICULUM = {
+    "A1": {
+        "K1": {"title": "Hallo!", "topic": "Begrüßung und Vorstellung", "grammar": "Personalpronomen: ich, du"},
+        "K2": {"title": "Kein Problem!", "topic": "Erste Wörter und Bitten", "grammar": "Formell vs. informell"},
+        "K3": {"title": "Tschüss!", "topic": "Verabschiedung", "grammar": "Verabschiedungsformeln"},
+        "K4": {"title": "Von A bis Z", "topic": "Alphabet und Buchstabieren", "grammar": "Alphabet"},
+        "K5": {"title": "Zahlen von 1 bis 100", "topic": "Zahlen und Nummern", "grammar": "Zahlen 1-100"},
+        "K6": {"title": "Eine Pizza, bitte!", "topic": "Essen und Trinken bestellen", "grammar": "Artikel: der/die/das"},
+        "K7": {"title": "Was machst du hier?", "topic": "Alltagsaktivitäten", "grammar": "Präsens: regelmäßige Verben"},
+        "K8": {"title": "Wo wohnst du?", "topic": "Wohnen und Adresse", "grammar": "Präpositionen: in, an, bei"},
+        "K9": {"title": "Wie spät ist es?", "topic": "Uhrzeit und Zeitangaben", "grammar": "Trennbare Verben"},
+        "K10": {"title": "Wo ist der Bahnhof?", "topic": "Wege und Orientierung", "grammar": "Imperativ"},
+        "K11": {"title": "Mein Beruf", "topic": "Arbeit und Berufe", "grammar": "Modalverben: können, müssen"},
+        "K12": {"title": "Emmas Tag", "topic": "Tagesablauf", "grammar": "Trennbare Verben (2)"}
+    }
+}
+
 PROGRESS_FILE = "german_progress.json"
 
 def load_progress():
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {"level": "A1", "lesson": 1}
+    return {"level": "A1", "lektion": "K1"}
 
 def save_progress(p):
     with open(PROGRESS_FILE, 'w', encoding='utf-8') as f:
         json.dump(p, f, ensure_ascii=False, indent=2)
 
-def ask_ai(prompt):
+def ask_ai(prompt, system_prompt):
     if not client:
         return "No AI client"
     try:
         r = client.chat.completions.create(
             model="openai/gpt-oss-20b",
-            messages=[{"role": "user", "content": prompt}]
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ]
         )
         return r.choices[0].message.content
     except Exception as e:
         return f"Error: {e}"
 
-HTML = """<!DOCTYPE html>
+def text_to_speech(text, lang='de'):
+    try:
+        tts = gTTS(text=text, lang=lang, slow=False)
+        mp3_fp = io.BytesIO()
+        tts.write_to_fp(mp3_fp)
+        mp3_fp.seek(0)
+        return mp3_fp
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return None
+
+# ============ HTML ============
+HTML_TEMPLATE = """
+<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<title>معلم الألمانية</title>
+<title>🇩🇪 Deutsch-Tutor (Nicos Weg A1)</title>
 <style>
-body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #1a1a2e, #16213e); min-height: 100vh; color: #eee; padding: 20px; margin: 0; }
-.container { max-width: 900px; margin: 0 auto; }
-header { text-align: center; padding: 20px; background: rgba(255,255,255,0.05); border-radius: 15px; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.1); }
-h1 { color: #ffcc00; font-size: 28px; margin: 0 0 8px 0; }
-.subtitle { color: #aaa; font-size: 14px; }
-.stats { display: flex; gap: 15px; justify-content: center; margin-top: 15px; flex-wrap: wrap; }
-.stat { background: rgba(255,204,0,0.1); padding: 8px 15px; border-radius: 20px; font-size: 13px; border: 1px solid rgba(255,204,0,0.3); }
-.stat strong { color: #ffcc00; }
-.buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
-button { padding: 15px; border: none; border-radius: 12px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; font-size: 15px; cursor: pointer; font-weight: bold; transition: transform 0.2s; }
-button:hover { transform: translateY(-2px); }
-button.primary { background: linear-gradient(135deg, #ffcc00, #ff9900); color: #000; }
-button.speak { padding: 3px 8px; margin-right: 5px; font-size: 13px; background: rgba(255,204,0,0.4); border-radius: 6px; cursor: pointer; border: none; color: #fff; }
-#content { background: rgba(255,255,255,0.05); border-radius: 15px; padding: 25px; min-height: 400px; border: 1px solid rgba(255,255,255,0.1); line-height: 1.9; font-size: 15px; overflow-y: auto; max-height: 600px; }
-#content h2 { color: #ffcc00; margin: 20px 0 10px 0; border-right: 4px solid #ffcc00; padding-right: 10px; }
-#content h3 { color: #88ccff; margin: 15px 0 8px 0; }
-#content strong { color: #ffcc00; }
-#content table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-#content th { background: rgba(255,204,0,0.2); padding: 10px; text-align: right; }
-#content td { border: 1px solid rgba(255,255,255,0.1); padding: 8px; }
-#content code { background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; color: #88ff88; }
-.input-area { display: flex; gap: 10px; margin-top: 20px; }
-input { flex: 1; padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: #eee; font-size: 15px; }
-.loader { display: none; text-align: center; padding: 20px; color: #ffcc00; }
-.loader.show { display: block; }
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: 0; padding: 20px; min-height: 100vh; }
+    .container { max-width: 950px; margin: auto; background: #ffffff; padding: 30px; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+    h1 { text-align: center; color: #1a73e8; margin: 0 0 5px; font-size: 28px; }
+    .subtitle { text-align: center; color: #666; margin-bottom: 25px; font-size: 14px; }
+    .info-bar { display: flex; justify-content: space-around; background: linear-gradient(90deg, #e8f0fe, #d2e3fc); padding: 15px; border-radius: 12px; margin-bottom: 20px; font-weight: 600; color: #1a73e8; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-bottom: 25px; }
+    .controls select { padding: 12px; border: 2px solid #1a73e8; border-radius: 10px; font-size: 15px; background: white; color: #1a73e8; font-weight: 600; cursor: pointer; }
+    button { background: linear-gradient(135deg, #1a73e8, #1557b0); color: white; border: none; padding: 12px 22px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; transition: transform 0.2s, box-shadow 0.2s; }
+    button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(26,115,232,0.4); }
+    .btn-test { background: linear-gradient(135deg, #f09300, #e37400); }
+    .btn-vocab { background: linear-gradient(135deg, #34a853, #2c8e47); }
+    .content { background: #f8f9fa; padding: 25px; border-radius: 15px; min-height: 300px; line-height: 2; font-size: 16px; color: #333; border-right: 5px solid #1a73e8; }
+    .content h2 { color: #1a73e8; border-bottom: 2px solid #e8f0fe; padding-bottom: 8px; margin-top: 25px; }
+    .content h3 { color: #34a853; }
+    .content table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+    .content th { background: #1a73e8; color: white; padding: 10px; }
+    .content td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+    .content tr:nth-child(even) { background: #f0f4ff; }
+    .speak-btn { background: #4285f4; border: none; border-radius: 50%; width: 35px; height: 35px; cursor: pointer; font-size: 16px; margin: 0 5px; padding: 0; }
+    .loading { text-align: center; color: #1a73e8; font-size: 18px; padding: 40px; }
+    .loading::after { content: ''; display: inline-block; width: 20px; height: 20px; border: 3px solid #e8f0fe; border-top-color: #1a73e8; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 10px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 <div class="container">
-    <header>
-        <h1>معلم الألمانية الذكي</h1>
-        <div class="subtitle">تعلم الألمانية من A1 إلى B1</div>
-        <div class="stats">
-            <div class="stat">المستوى: <strong id="level">A1</strong></div>
-            <div class="stat">الدرس: <strong id="lesson">1</strong></div>
-        </div>
-    </header>
-    <div class="buttons">
-        <button class="primary" onclick="doAction('lesson')">درس جديد</button>
-        <button onclick="doAction('prev')">⬅️ الدرس السابق</button>
-        <button onclick="doAction('next')">➡️ الدرس التالي</button>
-        <button onclick="doAction('quiz')">اختبار سريع</button>
-        <button onclick="doAction('vocab')">مفرداتي</button>
-        <button onclick="doAction('tips')">نصائح</button>
+    <h1>🇩🇪 Deutsch-Tutor</h1>
+    <p class="subtitle">Basierend auf „Nicos Weg" A1 – Deutsche Welle</p>
+    <div class="info-bar">
+        <span>📊 Niveau: <span id="level">A1</span></span>
+        <span>📖 Lektion: <span id="lektion">K1</span></span>
     </div>
-    <div id="content">مرحباً! اضغط "درس جديد" لتبدأ.</div>
-    <div class="loader" id="loader">جاري التحضير...</div>
-    <div class="input-area">
-        <input id="msg" placeholder="اسأل أي سؤال..." onkeypress="if(event.key==='Enter')sendMsg()">
-        <button onclick="sendMsg()">إرسال</button>
+    <div class="controls">
+        <select id="levelSelect" onchange="updateLevel()">
+            <option value="A1">A1 - Anfänger</option>
+        </select>
+        <select id="lektionSelect" onchange="updateLektion()"></select>
+        <button onclick="loadLesson()">📖 Lektion</button>
+        <button class="btn-test" onclick="startTest()">📝 Test</button>
+        <button class="btn-vocab" onclick="showVocab()">📚 Vokabeln</button>
+    </div>
+    <div class="content" id="content">
+        <div class="loading">Wähle eine Lektion und klicke auf "Lektion"</div>
     </div>
 </div>
+
 <script>
-async function speak(text) {
+const CURRICULUM = {{ curriculum | safe }};
+let currentLevel = "A1";
+let currentLektion = "K1";
+
+function updateLektionOptions() {
+    const sel = document.getElementById('lektionSelect');
+    sel.innerHTML = '';
+    const lessons = Object.keys(CURRICULUM[currentLevel]);
+    lessons.forEach(l => {
+        const opt = document.createElement('option');
+        opt.value = l;
+        opt.text = l + ': ' + CURRICULUM[currentLevel][l].title;
+        sel.appendChild(opt);
+    });
+    currentLektion = lessons[0];
+}
+
+function updateLevel() {
+    currentLevel = document.getElementById('levelSelect').value;
+    updateLektionOptions();
+    document.getElementById('level').innerText = currentLevel;
+}
+
+function updateLektion() {
+    currentLektion = document.getElementById('lektionSelect').value;
+    document.getElementById('lektion').innerText = currentLektion;
+}
+
+function setLoading(text) {
+    document.getElementById('content').innerHTML = '<div class="loading">' + text + '</div>';
+}
+
+async function loadLesson() {
+    setLoading('Lektion wird geladen...');
+    const res = await fetch('/lesson', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({level: currentLevel, lektion: currentLektion})
+    });
+    const data = await res.json();
+    document.getElementById('content').innerHTML = data.html;
+    attachSpeakButtons();
+}
+
+async function startTest() {
+    setLoading('Test wird erstellt...');
+    const res = await fetch('/test', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({level: currentLevel, lektion: currentLektion})
+    });
+    const data = await res.json();
+    document.getElementById('content').innerHTML = data.html;
+}
+
+async function showVocab() {
+    setLoading('Vokabeln werden geladen...');
+    const res = await fetch('/vocab', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({level: currentLevel, lektion: currentLektion})
+    });
+    const data = await res.json();
+    document.getElementById('content').innerHTML = data.html;
+    attachSpeakButtons();
+}
+
+function attachSpeakButtons() {
+    document.querySelectorAll('.speak-btn').forEach(btn => {
+        btn.onclick = function() {
+            const word = this.getAttribute('data-word');
+            speakWord(word);
+        };
+    });
+}
+
+async function speakWord(word) {
     try {
-        const r = await fetch('/tts', {
+        const res = await fetch('/speak', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({text: text})
+            body: JSON.stringify({text: word})
         });
-        if (!r.ok) throw new Error('TTS failed');
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
+        const blob = await res.blob();
+        const audio = new Audio(URL.createObjectURL(blob));
         audio.play();
-    } catch(e) {
-        alert('خطأ في الصوت: ' + e);
-    }
+    } catch (e) { console.error('Audio error:', e); }
 }
-function addSpeakButtons() {
-    const content = document.getElementById('content');
-    content.querySelectorAll('td').forEach(td => {
-        const text = td.textContent.trim();
-        if (text && text.length > 2 && text.length < 40 && /^[a-zA-ZäöüßÄÖÜ\s\-]+$/.test(text)) {
-            if (!td.querySelector('button.speak')) {
-                const btn = document.createElement('button');
-                btn.className = 'speak';
-                btn.textContent = '🔊';
-                btn.onclick = () => speak(text);
-                td.insertBefore(btn, td.firstChild);
-            }
-        }
-    });
-}
-async function updateStats() {
-    const r = await fetch('/stats');
-    const d = await r.json();
-    document.getElementById('level').textContent = d.level;
-    document.getElementById('lesson').textContent = d.lesson;
-}
-async function doAction(action) {
-    document.getElementById('loader').classList.add('show');
-    const r = await fetch('/action', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({action: action})
-    });
-    const d = await r.json();
-    document.getElementById('content').innerHTML = d.content;
-    document.getElementById('loader').classList.remove('show');
-    await updateStats();
-    setTimeout(addSpeakButtons, 300);
-}
-async function sendMsg() {
-    const msg = document.getElementById('msg').value.trim();
-    if (!msg) return;
-    document.getElementById('msg').value = '';
-    document.getElementById('content').innerHTML = '<strong>أنت:</strong> ' + msg + '<br><br>';
-    document.getElementById('loader').classList.add('show');
-    const r = await fetch('/ask', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({message: msg})
-    });
-    const d = await r.json();
-    document.getElementById('content').innerHTML += '<strong>المعلم:</strong><br>' + d.content;
-    document.getElementById('loader').classList.remove('show');
-    setTimeout(addSpeakButtons, 300);
-}
-updateStats();
+
+setTimeout(() => {
+    const observer = new MutationObserver(() => attachSpeakButtons());
+    observer.observe(document.getElementById('content'), { childList: true, subtree: true });
+}, 1000);
+
+updateLektionOptions();
 </script>
 </body>
-</html>"""
-
-def md_to_html(text):
-    return markdown.markdown(text, extensions=['tables'])
+</html>
+"""
 
 @app.route('/')
 def home():
-    return HTML
+    return render_template_string(HTML_TEMPLATE, curriculum=json.dumps(CURRICULUM, ensure_ascii=False))
 
-@app.route('/tts', methods=['POST'])
-def tts():
+@app.route('/lesson', methods=['POST'])
+def lesson():
+    data = request.json
+    level = data.get('level', 'A1')
+    lektion = data.get('lektion', 'K1')
+    
+    if level not in CURRICULUM or lektion not in CURRICULUM[level]:
+        return jsonify({"html": "<p>Lektion nicht gefunden.</p>"})
+    
+    lesson_info = CURRICULUM[level][lektion]
+    
+    system_prompt = """You are a German teacher for Arabic speakers, using the official "Nicos Weg" A1 curriculum from Deutsche Welle.
+RULES:
+1. Main content in GERMAN. Arabic translation below each German word.
+2. Use emojis for vocabulary.
+3. Create a COMPLETE lesson with: Lernziele, Vokabeln (table), Dialog (with audio), Grammatik, Übungen.
+4. Format as clean HTML."""
+    
+    prompt = f"""Erstelle eine vollständige Deutschlektion "{lesson_info['title']}" zum Thema "{lesson_info['topic']}" (Grammatik: {lesson_info['grammar']}) für Niveau A1.
+
+Struktur:
+## 🎯 Lernziele
+(3-4 Ziele auf Deutsch mit arabischer Übersetzung)
+
+## 📚 Vokabeln
+Tabelle mit 12 Wörtern: | Deutsch | Artikel | Arabisch | Emoji |
+
+## 💬 Dialog
+Ein kurzer Dialog (8 Zeilen) auf Deutsch, mit arabischer Übersetzung unter jeder Zeile.
+
+## 📖 Grammatik: {lesson_info['grammar']}
+Eine einfache Regel auf Deutsch, mit arabischer Erklärung.
+
+## ✏️ Übungen
+2 kurze Übungen.
+
+Gib nur den HTML-Inhalt zurück (kein <html> Tag). Verwende <h2>, <h3>, <table>, <p>, <ul>."""
+    
+    content = ask_ai(prompt, system_prompt)
+    html_content = markdown.markdown(content, extensions=['tables', 'fenced_code'])
+    return jsonify({"html": html_content})
+
+@app.route('/test', methods=['POST'])
+def test():
+    data = request.json
+    level = data.get('level', 'A1')
+    lektion = data.get('lektion', 'K1')
+    lesson_info = CURRICULUM[level][lektion]
+    
+    system_prompt = """You are a German teacher creating multiple-choice tests for Arabic speakers.
+RULES:
+1. Questions in GERMAN. Arabic translation below.
+2. 4 options (A, B, C, D) in German.
+3. Mark correct answer.
+4. Return as clean HTML."""
+    
+    prompt = f"""Erstelle einen Multiple-Choice-Test (5 Fragen) zum Thema "{lesson_info['topic']}" für Niveau A1.
+
+Format:
+<div class="question">
+<h3>Frage 1: [السؤال بالألماني]</h3>
+<p><em>[الترجمة العربية]</em></p>
+<ul><li>A) ...</li><li>B) ...</li><li>C) ...</li><li>D) ...</li></ul>
+<p><strong>✅ Richtige Antwort: X</strong></p>
+</div>
+
+Gib nur sauberes HTML zurück."""
+    
+    content = ask_ai(prompt, system_prompt)
+    return jsonify({"html": content})
+
+@app.route('/vocab', methods=['POST'])
+def vocab():
+    data = request.json
+    level = data.get('level', 'A1')
+    lektion = data.get('lektion', 'K1')
+    lesson_info = CURRICULUM[level][lektion]
+    
+    system_prompt = """Create a vocabulary list in HTML for German learners.
+RULES:
+1. German words with articles
+2. Arabic translation
+3. Emoji for each word
+4. Add a speaker button: <button class="speak-btn" data-word="WORD">🔊</button>
+5. Use a clean table"""
+    
+    prompt = f"""Erstelle eine Vokabelliste (15 Wörter) zum Thema "{lesson_info['topic']}" für Niveau A1.
+
+Format:
+<table>
+<tr><th>🔊</th><th>Deutsch</th><th>Arabisch</th><th>Emoji</th></tr>
+<tr><td><button class="speak-btn" data-word="Apfel">🔊</button></td><td>der Apfel</td><td>تفاحة</td><td>🍎</td></tr>
+...
+</table>
+
+Gib nur die Tabelle zurück."""
+    
+    content = ask_ai(prompt, system_prompt)
+    return jsonify({"html": content})
+
+@app.route('/speak', methods=['POST'])
+def speak():
     data = request.json
     text = data.get('text', '')
     if not text:
-        return Response('No text', status=400)
-    try:
-        tts = gTTS(text=text, lang='de', slow=False)
-        audio = io.BytesIO()
-        tts.write_to_fp(audio)
-        audio.seek(0)
-        return Response(audio.read(), mimetype='audio/mpeg')
-    except Exception as e:
-        return Response(f'Error: {e}', status=500)
-
-@app.route('/stats')
-def stats():
-    p = load_progress()
-    return jsonify({"level": p.get("level", "A1"), "lesson": p.get("lesson", 1)})
-
-@app.route('/action', methods=['POST'])
-def action():
-    data = request.json
-    act = data.get('action')
-    p = load_progress()
-    
-    if act == 'lesson':
-        prompt = f"You are a German teacher for Arabic beginners. Create a complete lesson for LEVEL {p['level']}, LESSON {p['lesson']}. Write in Arabic with German examples. Include: 1) Lesson goals, 2) 10 vocabulary words in a table (German | Pronunciation | Arabic), 3) One grammar rule, 4) 5 exercises, 5) Short dialogue, 6) 3 tips. Use markdown."
-        content = ask_ai(prompt)
-        p['lesson'] += 1
-        save_progress(p)
-        return jsonify({"content": md_to_html(content)})
-    
-    elif act == 'next':
-        p['lesson'] += 1
-        save_progress(p)
-        prompt = f"Create lesson {p['lesson']} for level {p['level']} in Arabic with German examples. Include vocab table, grammar, exercises, dialogue."
-        content = ask_ai(prompt)
-        return jsonify({"content": md_to_html(content)})
-    
-    elif act == 'prev':
-        if p['lesson'] > 1:
-            p['lesson'] -= 1
-        save_progress(p)
-        prompt = f"Create lesson {p['lesson']} for level {p['level']} in Arabic with German examples. Include vocab table, grammar, exercises, dialogue."
-        content = ask_ai(prompt)
-        return jsonify({"content": md_to_html(content)})
-    
-    elif act == 'quiz':
-        prompt = f"Create a 5-question German quiz for level {p['level']} with Arabic explanations. Include answers at the end."
-        content = ask_ai(prompt)
-        return jsonify({"content": md_to_html(content)})
-    
-    elif act == 'vocab':
-        prompt = f"Create a vocabulary review for German level {p['level']}. Table with 20 words: German | Pronunciation | Arabic. Organized by theme."
-        content = ask_ai(prompt)
-        return jsonify({"content": md_to_html(content)})
-    
-    elif act == 'tips':
-        prompt = "Give 10 golden tips for learning German as an Arabic speaker. In Arabic, practical and motivating."
-        content = ask_ai(prompt)
-        return jsonify({"content": md_to_html(content)})
-    
-    return jsonify({"content": "Unknown"})
-
-@app.route('/ask', methods=['POST'])
-def ask():
-    data = request.json
-    msg = data.get('message', '')
-    p = load_progress()
-    prompt = f"You are a patient German teacher for an Arabic speaker at level {p['level']}. Answer in Arabic with German examples. Student asks: {msg}"
-    content = ask_ai(prompt)
-    return jsonify({"content": md_to_html(content)})
+        return Response(status=400)
+    audio = text_to_speech(text, 'de')
+    if audio is None:
+        return Response(status=500)
+    return Response(audio.read(), mimetype='audio/mpeg')
 
 if __name__ == '__main__':
-    print("\nOpen in browser: http://localhost:5001\n")
     app.run(host='0.0.0.0', port=5001, debug=False)
